@@ -1,118 +1,315 @@
 # Threat Hunting Platform
 
-Plataforma web de *threat hunting* con agente de endpoint autónomo.
+Plataforma web de *threat hunting*: un **agente** instalado en cada equipo recolecta telemetría de forma autónoma y la
+envía a un **servidor** (por ejemplo en Kali Linux), que detecta amenazas, caza de forma automática y muestra todo en un
+panel web.
 
 ```
- ┌──────────────┐  telemetría (HTTPS/JSON)   ┌──────────────────────────────┐
- │ Agente       │ ─────────────────────────▶ │ Servidor FastAPI             │
- │ (psutil)     │                            │  · detección en tiempo real  │
- │ procesos,    │ ◀───────────────────────── │  · motor de caza autónomo    │
- │ red, persist.│  tareas forenses (lista    │  · respuesta autónoma        │
- └──────────────┘  blanca, solo lectura)     │  · SQLite + panel web (SPA)  │
-                                             └──────────────────────────────┘
+  Equipos Windows                        Internet (HTTPS)                 Kali Linux
+ ┌──────────────────────┐                                          ┌────────────────────────────┐
+ │ ThreatHuntingAgent   │  procesos, red, persistencia  ┌───────┐  │ start_server.sh            │
+ │ (servicio SYSTEM)    │ ────────────────────────────▶ │ ngrok │ ─▶  · detección en tiempo real│
+ │                      │ ◀──────────────────────────── │ túnel │  │  · caza autónoma (1 min)   │
+ └──────────────────────┘  tareas forenses (solo lectura) └───────┘  │  · panel web :8000         │
+                                                                   └────────────────────────────┘
 ```
 
-## Componentes
+## Índice
 
-- **Agente** (`agent/th_agent.py`, Linux/Windows/macOS): recolecta procesos (árbol, usuario, cmdline, SHA256), muestrea
-  conexiones nuevas cada 2 s (para detectar *beaconing*), puertos en escucha, sesiones y persistencia
-  (cron, systemd, launchd, Run keys, servicios, tareas programadas, authorized_keys, ld.so.preload, perfiles de shell).
-  Si pierde la conexión con el servidor, guarda los eventos y los reenvía después. Además ejecuta **solo** módulos forenses de lectura:
-  `snapshot`, `process_tree`, `hash_file`, `scan_file` (firmas + entropía), `list_dir`, `connections`, `hunt_mode`.
-  Nunca ejecuta comandos arbitrarios.
-- **Detección en tiempo real** (`server/detections.py`): más de 20 reglas mapeadas a MITRE ATT&CK, comparación con la línea base
-  (persistencia y puertos nuevos) e IOCs.
-- **Caza autónoma** (`server/hunter.py`): cada `THL_HUNT_INTERVAL` segundos prueba hipótesis sobre toda la flota:
-  beaconing C2 (regularidad estadística), binarios raros (*stack counting*), ráfagas de reconocimiento, movimiento lateral
-  y escaneo, linaje de procesos inusual, caza retrospectiva de IOCs, agentes silenciados y correlación de la cadena de ataque.
-- **Respuesta autónoma** (`server/responder.py`): ante hallazgos altos o críticos encola recolección forense en el agente.
-  Los resultados (por ejemplo, firmas encontradas en un binario) vuelven a pasar por la detección. También calcula la puntuación de riesgo de cada host.
-- **Panel web** (`server/static/`): panorama, agentes (árbol de procesos, red, persistencia, tareas), triaje de
-  hallazgos, consola de caza con lenguaje de consulta y exportación CSV, matriz ATT&CK, IOCs y cola de tareas.
+1. [Guía rápida](#guía-rápida)
+2. [Primera instalación del servidor (Kali)](#1-primera-instalación-del-servidor-kali)
+3. [Publicar el servidor en Internet con ngrok](#2-publicar-el-servidor-en-internet-con-ngrok)
+4. [Instalar el agente en Windows](#3-instalar-el-agente-en-windows)
+5. [Uso diario](#4-uso-diario)
+6. [Cómo hacer threat hunting con el panel](#5-cómo-hacer-threat-hunting-con-el-panel)
+7. [Solución de problemas](#6-solución-de-problemas)
+8. [Límites y consideraciones](#7-límites-y-consideraciones)
+9. [Referencia técnica](#referencia-técnica)
 
-## Puesta en marcha
+---
+
+## Guía rápida
+
+| Cuándo | Dónde | Qué hacer |
+|---|---|---|
+| **Una sola vez** | Kali | Clonar el repo, crear `.env`, instalar ngrok y configurar su authtoken |
+| **Una vez por equipo** | Windows | Ejecutar `ThreatHuntingAgent-Setup.exe` con la URL y la clave |
+| **Cada vez que enciendes Kali** | Kali | `cd ~/Desktop/Threat-Hunting && ./start_server.sh` |
+| **Nunca** | Windows | El agente arranca solo con el equipo y se reconecta solo |
+
+---
+
+## 1. Primera instalación del servidor (Kali)
 
 ```bash
-pip install -r requirements.txt
-export THL_ADMIN_TOKEN='token-del-analista'   # acceso al panel
-export THL_ENROLL_KEY='clave-de-enrolamiento' # la usan los agentes
-uvicorn server.main:app --host 0.0.0.0 --port 8000
-```
-
-Abre `http://SERVIDOR:8000` e introduce el token. En cada endpoint (como root/Administrador para tener visibilidad completa):
-
-```bash
-pip install -r agent/requirements.txt
-python agent/th_agent.py --server http://SERVIDOR:8000 --enroll-key 'clave-de-enrolamiento' --interval 60
-```
-
-En producción, usa HTTPS delante del servidor (proxy inverso). El agente admite `--ca` para una CA propia.
-
-### Servidor en Kali (un comando)
-
-```bash
+cd ~/Desktop
 git clone -b claude/great-bardeen-bkkcfr https://github.com/ksolisc07-dev/Threat-Hunting.git
 cd Threat-Hunting
+```
+
+Crea el archivo de configuración `.env` con **tus propios valores** (no los compartas ni los subas a GitHub;
+`.env` ya está en `.gitignore`):
+
+```bash
+cat > .env <<'EOF'
+THL_ADMIN_TOKEN=pon-aqui-un-token-largo-para-el-panel
+THL_ENROLL_KEY=pon-aqui-una-clave-larga-para-los-agentes
+THL_PORT=8000
+EOF
+```
+
+| Variable | Para qué sirve |
+|---|---|
+| `THL_ADMIN_TOKEN` | Contraseña para entrar al panel web |
+| `THL_ENROLL_KEY` | Clave que se escribe en el instalador de cada equipo |
+| `THL_PORT` | Puerto del servidor (por defecto 8000) |
+| `NGROK_URL` | Tu dominio de ngrok (ver sección 2); si está, el túnel arranca solo |
+
+> Si no creas `.env`, `start_server.sh` genera uno con valores aleatorios y los muestra en pantalla.
+> Si pegas el bloque y la terminal se queda en `EOF` o `>`, pulsa **Enter**.
+
+Arranca el servidor:
+
+```bash
+chmod +x start_server.sh
 ./start_server.sh
 ```
 
-La primera vez crea el entorno, genera el **token del panel** y la **clave para el agente** (guardados en `.env`)
-y los muestra en pantalla.
+La primera vez tarda un poco (crea un entorno virtual `.venv` e instala dependencias). Después abre
+**http://localhost:8000** en Kali y entra con tu `THL_ADMIN_TOKEN`.
 
-### Exponer el servidor a Internet (para agentes fuera de tu red)
+---
 
-Opción recomendada, **ngrok con dominio fijo gratuito** (HTTPS incluido, sin abrir puertos del router):
+## 2. Publicar el servidor en Internet con ngrok
+
+Necesario para que equipos que **no** están en la misma red que Kali puedan reportar. ngrok da una URL HTTPS pública
+fija sin abrir puertos en el router.
+
+### 2.1 Crear la cuenta y obtener tu dominio
+
+1. Regístrate gratis en <https://dashboard.ngrok.com/signup>.
+2. En el panel de ngrok → **Domains** verás tu dominio gratuito (*dev domain*), algo como
+   `palabra-palabra-palabra.ngrok-free.dev`.
+3. En **Your Authtoken** (<https://dashboard.ngrok.com/get-started/your-authtoken>) copia tu token de ngrok.
+
+### 2.2 Instalar ngrok en Kali (una vez)
 
 ```bash
-sudo apt install ngrok            # o descárgalo de ngrok.com
-ngrok config add-authtoken <TU_TOKEN_DE_NGROK>
-ngrok http --url=<tu-dominio>.ngrok-free.app 8000
+cd ~/Downloads && wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz && tar xzf ngrok-v3-stable-linux-amd64.tgz && sudo mv ngrok /usr/local/bin/ && ngrok version
 ```
 
-Los agentes usarán `https://<tu-dominio>.ngrok-free.app`. Para que `./start_server.sh` arranque también el
-túnel automáticamente, añade a `.env`:
+> Kali en ARM (`uname -m` = `aarch64`): usa `ngrok-v3-stable-linux-arm64.tgz`.
+> Si el enlace falla: panel de ngrok → *Setup & Installation* → *Linux*.
+
+Conecta ngrok con tu cuenta (en la terminal se pega con **Ctrl+Shift+V**):
+
+```bash
+ngrok config add-authtoken TU_AUTHTOKEN_DE_NGROK
+```
+
+Debe responder `Authtoken saved to configuration file`. Si al arrancar ngrok ves `ERR_NGROK_4018`, falta este paso.
+
+### 2.3 Que el túnel arranque solo con el servidor
+
+Añade tu dominio a `.env`:
+
+```bash
+cd ~/Desktop/Threat-Hunting
+echo "NGROK_URL=tu-dominio.ngrok-free.dev" >> .env
+```
+
+Desde ahora `./start_server.sh` arranca servidor **y** túnel, y `Ctrl+C` detiene ambos. Al arrancar verás:
 
 ```
-THL_PORT=8000
-NGROK_URL=<tu-dominio>.ngrok-free.app
-``` Alternativa: redirigir un puerto del router a Kali
-con DNS dinámico y un proxy HTTPS (Caddy/nginx). Usa siempre HTTPS si el tráfico va por Internet.
+ Panel web:            http://localhost:8000
+ URL para agentes:     https://tu-dominio.ngrok-free.dev
+```
 
-### Agente Windows: instalador `.exe`
+Comprobación desde cualquier navegador: `https://tu-dominio.ngrok-free.dev/api/health` debe mostrar `{"ok":true,...}`
+(si ngrok muestra una página de aviso, pulsa *Visit Site*; al agente no le afecta).
 
-No necesita Python ni PowerShell en el equipo: el ejecutable lo incluye todo.
+> **Misma red local, sin Internet:** si los equipos están en la misma red que Kali (VM en modo *puente*), no hace
+> falta ngrok: usa `http://IP-DE-KALI:8000` como URL (la IP sale con `ip a`).
 
-1. Descarga `ThreatHuntingAgent-Setup.exe` desde la pestaña **Actions** del repositorio
-   (workflow "Instalador del agente Windows" → último run → *Artifacts*).
-2. Ejecútalo en el Windows, escribe la URL del servidor y la clave del agente, y pulsa Siguiente → Instalar.
-3. El agente queda corriendo como SYSTEM y arranca con Windows. Log: `C:\ProgramData\ThreatHuntingAgent\agent.log`.
-   Se desinstala desde *Configuración → Aplicaciones*.
+---
 
-Instalación desatendida: `ThreatHuntingAgent-Setup.exe /VERYSILENT /SERVER=https://... /KEY=...`
+## 3. Instalar el agente en Windows
 
-### Variables de entorno del servidor
+El instalador incluye todo: **no hace falta instalar Python ni usar PowerShell**.
+
+### 3.1 Descargar el instalador
+
+1. En GitHub abre la pestaña **Actions** del repositorio.
+2. Entra en el workflow **"Instalador del agente Windows"** → último run con ✅.
+3. Abajo, en **Artifacts**, descarga **ThreatHuntingAgent-Setup** (un `.zip` con el `.exe`).
+
+> Los artifacts caducan a los 90 días; cada cambio en `agent/` genera uno nuevo automáticamente.
+
+### 3.2 Instalar
+
+Ejecuta `ThreatHuntingAgent-Setup.exe` en cada equipo y escribe:
+
+| Campo | Valor |
+|---|---|
+| **URL del servidor** | `https://tu-dominio.ngrok-free.dev` (o `http://IP-DE-KALI:8000` en red local) |
+| **Clave de enrolamiento** | el valor de `THL_ENROLL_KEY` de tu `.env` |
+
+Siguiente → Instalar → Finalizar. En menos de un minuto el equipo aparece en **Agentes** con el punto verde.
+
+- El agente corre como **SYSTEM**, arranca con Windows y se reinicia solo si falla.
+- Configuración y log: `C:\ProgramData\ThreatHuntingAgent\` (`config.json`, `agent.log`).
+- Para cambiar URL o clave: vuelve a ejecutar el instalador (sobrescribe la configuración).
+- Desinstalar: *Configuración → Aplicaciones → Threat Hunting Agent*.
+- Despliegue masivo: `ThreatHuntingAgent-Setup.exe /VERYSILENT /SERVER=https://... /KEY=...`
+
+> **SmartScreen / Defender** pueden avisar porque el `.exe` no está firmado digitalmente: *Más información →
+> Ejecutar de todas formas*. Si Defender lo bloquea, añade una exclusión para
+> `C:\Program Files\ThreatHuntingAgent\`.
+
+### Linux / macOS
+
+No hay instalador; se ejecuta con Python:
+
+```bash
+pip install psutil
+sudo python3 agent/th_agent.py --server https://tu-dominio.ngrok-free.dev --enroll-key TU_CLAVE
+```
+
+---
+
+## 4. Uso diario
+
+```bash
+cd ~/Desktop/Threat-Hunting && ./start_server.sh
+```
+
+Nada más. Abre `http://localhost:8000`. Los agentes se reconectan solos cuando el servidor vuelve; las conexiones de red
+observadas mientras Kali estaba apagado se guardan en el agente y se envían al reconectar.
+
+Para actualizar el servidor a la última versión:
+
+```bash
+cd ~/Desktop/Threat-Hunting && git pull origin claude/great-bardeen-bkkcfr
+```
+
+Tu `.env` y la base de datos (`threat_hunting.db`) no se tocan.
+
+---
+
+## 5. Cómo hacer threat hunting con el panel
+
+| Sección | Para qué |
+|---|---|
+| **Panorama** | Resumen: agentes en línea, hallazgos por severidad y hora, hosts con más riesgo, actividad del cazador |
+| **Agentes** → equipo | Árbol de procesos (clic = ruta, hash, VirusTotal), conexiones de red, puertos en escucha, persistencia (Run keys, servicios, tareas programadas), tareas |
+| **Hallazgos** | Lo detectado. Clic para ver evidencia y marcar *Investigar*, *Resolver* o *Falso positivo* |
+| **Caza** | Búsquedas manuales sobre toda la telemetría + estado de las hipótesis automáticas |
+| **ATT&CK** | Matriz MITRE con las técnicas observadas |
+| **IOCs** | Indicadores (IP, hash, proceso…) que se buscan en tiempo real y en todo el histórico |
+| **Tareas** | Recolección forense pedida a los agentes (🤖 automática, 👤 manual) |
+| **Cazar ahora** | Lanza un ciclo de caza inmediato (también corre solo cada minuto) |
+
+### Ejemplos de búsqueda (sección Caza)
+
+| Ámbito | Consulta | Busca |
+|---|---|---|
+| Procesos | `name:powershell.exe` | Todas las ejecuciones de PowerShell |
+| Procesos | `parent:winword.exe\|excel.exe` | Procesos lanzados por Office |
+| Procesos | `exe:*\AppData\Local\Temp\*` | Ejecutables corriendo desde Temp |
+| Red | `rport:443 -raddr:10.*` | Conexiones HTTPS fuera de la red interna |
+| Persistencia | `kind:run_key` | Programas en claves Run del registro |
+
+Sintaxis: `campo:valor` (se combinan con AND), `-campo:valor` niega, `a|b` es OR, `*` es comodín, `since:30m|2h|7d`
+filtra por tiempo, y `rport:>1024` compara números.
+
+### Prueba inofensiva para ver una detección
+
+En un Windows con agente abre **cmd** y ejecuta: `whoami`, `ipconfig`, `systeminfo`, `net user`, `tasklist`.
+Tras 1–2 minutos (o pulsando *Cazar ahora*) aparece el hallazgo **"Ráfaga de reconocimiento"** (MITRE T1082):
+muchos comandos de enumeración en poco tiempo, como haría un atacante tras entrar.
+
+### Qué detecta
+
+- **En tiempo real** (20+ reglas MITRE ATT&CK): PowerShell codificado, Office lanzando intérpretes, web shells, abuso
+  de LOLBins, ejecución desde Temp, volcado de credenciales, borrado de shadow copies/logs, suplantación de procesos
+  del sistema, mineros, conexiones a puertos de C2, persistencia nueva o sospechosa, puertos nuevos en escucha, IOCs.
+- **Caza autónoma cada minuto**: beaconing C2 (regularidad estadística), binarios raros en la flota, ráfagas de
+  reconocimiento, movimiento lateral/escaneo, linaje de procesos inusual, IOCs retroactivos, agentes silenciados tras
+  alertas y correlación de cadena de ataque (3+ tácticas en el mismo equipo).
+- **Respuesta autónoma**: ante hallazgos altos/críticos pide al agente el árbol del proceso, escaneo del binario
+  (firmas + entropía) y más frecuencia de recolección; los resultados se vuelven a analizar.
+
+> "Binarios raros" y "linaje inusual" comparan equipos entre sí: se activan con **3 o más agentes**.
+
+---
+
+## 6. Solución de problemas
+
+| Síntoma | Causa probable | Solución |
+|---|---|---|
+| `./start_server.sh: no such file` | Copia antigua del repo | `git pull origin claude/great-bardeen-bkkcfr` (si se queja: `git checkout start_server.sh` y repetir) |
+| Panel dice "Token inválido" | Token distinto al de `.env` o servidor sin reiniciar | `cat .env`, reinicia `./start_server.sh` y usa `THL_ADMIN_TOKEN` |
+| `ngrok: command not found` | ngrok no instalado | Sección 2.2 |
+| `ERR_NGROK_4018` | Falta el authtoken | `ngrok config add-authtoken ...` |
+| "URL para agentes: (sin túnel…)" | `NGROK_URL` no está en `.env` | Sección 2.3 |
+| El equipo no aparece en Agentes | Ver `C:\ProgramData\ThreatHuntingAgent\agent.log` | Según el mensaje ↓ |
+| Log: `HTTP Error 403` | La clave no coincide con `THL_ENROLL_KEY` | Reinstala el agente con la clave correcta |
+| Log: `Servidor no disponible` / `timed out` | Kali apagado, túnel caído o URL/puerto incorrectos | Comprueba `https://tu-dominio/api/health` desde el equipo |
+| No existe `agent.log` | El agente no arrancó | Reinicia Windows; revisa *Seguridad de Windows → Historial de protección* |
+| Hallazgos de programas legítimos | Reglas sin ajustar a tu entorno | Márcalos como *Falso positivo* |
+
+---
+
+## 7. Límites y consideraciones
+
+- **Plan gratuito de ngrok**: tiene cuotas mensuales de peticiones y tráfico (consulta las cifras actuales en
+  **Usage** de tu panel de ngrok). Cada agente envía telemetría cada 60 s (~43.000 envíos/mes por equipo), por lo que
+  **incluso un solo equipo puede agotar la cuota gratuita**; al superarla ngrok corta el túnel hasta el mes
+  siguiente. Para varios equipos considera un plan de pago, un VPS o redirigir un puerto del router con HTTPS propio.
+- **Seguridad**: el panel queda accesible desde Internet a través de ngrok; usa un `THL_ADMIN_TOKEN` largo y no
+  compartas `.env`. El agente solo ejecuta módulos forenses de lectura en lista blanca: nunca comandos arbitrarios.
+- **Kali encendido**: sin servidor no hay detección; los agentes guardan las conexiones de red y reintentan.
+- **Instalador sin firma digital**: puede generar avisos de SmartScreen/antivirus.
+
+---
+
+## Referencia técnica
+
+### Estructura
+
+| Ruta | Contenido |
+|---|---|
+| `server/main.py` | API FastAPI y servidor del panel |
+| `server/detections.py` | Reglas en tiempo real (MITRE ATT&CK) e IOCs |
+| `server/hunter.py` | Motor de caza autónomo (hipótesis) |
+| `server/responder.py` | Respuesta autónoma y puntuación de riesgo |
+| `server/ingest.py` | Ingesta de telemetría y líneas base |
+| `server/query.py` | Lenguaje de consulta de la consola de caza |
+| `server/static/` | Panel web (HTML/CSS/JS sin dependencias) |
+| `agent/th_agent.py` | Agente multiplataforma (psutil) |
+| `agent/windows/` | Instalador Inno Setup y registro de la tarea SYSTEM |
+| `.github/workflows/build-agent-windows.yml` | Compila `th_agent.exe` (PyInstaller) y el instalador |
+| `start_server.sh` | Arranque del servidor (+ ngrok opcional) |
+
+### Variables del servidor (`.env`)
 
 | Variable | Defecto | Descripción |
 |---|---|---|
-| `THL_DB` | `threat_hunting.db` | Ruta SQLite |
-| `THL_ADMIN_TOKEN` | aleatorio (se imprime) | Token del panel/API |
-| `THL_ENROLL_KEY` | `change-me-enroll-key` | Clave de enrolamiento de agentes |
+| `THL_ADMIN_TOKEN` | aleatorio | Token del panel/API |
+| `THL_ENROLL_KEY` | aleatorio | Clave de enrolamiento de agentes |
+| `THL_PORT` | `8000` | Puerto del servidor |
+| `NGROK_URL` | — | Dominio ngrok; si está, se arranca el túnel |
+| `THL_DB` | `threat_hunting.db` | Base de datos SQLite |
 | `THL_HUNT_INTERVAL` | `60` | Segundos entre ciclos de caza |
-| `THL_AUTO_RESPONSE` | `1` | Activa la recolección forense automática |
-| `THL_RETENTION_DAYS` | `14` | Retención de telemetría |
+| `THL_AUTO_RESPONSE` | `1` | Recolección forense automática |
+| `THL_RETENTION_DAYS` | `14` | Días de retención de telemetría |
 
-## Lenguaje de consulta
+### Opciones del agente
 
-```
-name:powershell.exe -user:*SYSTEM* since:24h
-parent:winword.exe|excel.exe
-rport:>1024 -raddr:10.*
-kind:cron value:*curl*
-```
+`--server`, `--enroll-key`, `--interval` (s), `--config` (JSON; en Windows por defecto
+`C:\ProgramData\ThreatHuntingAgent\config.json`), `--state-file`, `--log-file`, `--ca` (CA propia), `--once`.
 
-`campo:valor` (AND implícito), `-` niega, `|` hace OR, `*` es comodín, comparadores numéricos y `since:30m|2h|7d`.
-
-## Pruebas
+### Pruebas
 
 ```bash
 pip install -r requirements-dev.txt
