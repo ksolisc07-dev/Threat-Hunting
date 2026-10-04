@@ -1,0 +1,44 @@
+name: Instalador del agente Windows
+
+on:
+  push:
+    paths:
+      - "agent/**"
+      - ".github/workflows/build-agent-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependencias
+        run: python -m pip install --upgrade pip pyinstaller psutil
+
+      - name: Compilar th_agent.exe (Python incluido)
+        run: pyinstaller --noconfirm --clean --onedir --console --name th_agent agent/th_agent.py
+
+      - name: Prueba del ejecutable
+        run: |
+          dist\th_agent\th_agent.exe --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Instalar Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Crear instalador
+        run: |
+          $env:AGENT_VERSION = (Select-String -Path agent/th_agent.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" agent\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ThreatHuntingAgent-Setup
+          path: dist/ThreatHuntingAgent-Setup.exe
+          if-no-files-found: error

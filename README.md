@@ -48,30 +48,41 @@ python agent/th_agent.py --server http://SERVIDOR:8000 --enroll-key 'clave-de-en
 
 En producción, usa HTTPS delante del servidor (proxy inverso). El agente admite `--ca` para una CA propia.
 
-### Windows
+### Servidor en Kali (un comando)
 
-Requisito: Python 3.10+ de [python.org](https://www.python.org/downloads/windows/), instalado con
-**"Install for all users"** y **"Add python.exe to PATH"**.
-
-Servidor (PowerShell):
-
-```powershell
-cd C:\Threat-Hunting
-python -m pip install -r requirements.txt
-$env:THL_ADMIN_TOKEN = "token-del-analista"
-$env:THL_ENROLL_KEY  = "clave-de-enrolamiento"
-python -m uvicorn server.main:app --host 0.0.0.0 --port 8000
-# Si los agentes están en otros equipos, abre el puerto (PowerShell como Administrador):
-New-NetFirewallRule -DisplayName "Threat Hunting 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow
+```bash
+git clone -b claude/great-bardeen-bkkcfr https://github.com/ksolisc07-dev/Threat-Hunting.git
+cd Threat-Hunting
+./start_server.sh
 ```
 
-Agente como tarea programada (arranca con el sistema y corre como SYSTEM). Ejecuta en PowerShell **como Administrador**:
+La primera vez crea el entorno, genera el **token del panel** y la **clave para el agente** (guardados en `.env`)
+y los muestra en pantalla.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\agent\install_windows.ps1 -Server http://IP-DEL-SERVIDOR:8000 -EnrollKey "clave-de-enrolamiento"
-# Log:          C:\ProgramData\ThreatHuntingAgent\agent.log
-# Desinstalar:  powershell -ExecutionPolicy Bypass -File .\agent\install_windows.ps1 -Uninstall
+### Exponer el servidor a Internet (para agentes fuera de tu red)
+
+Opción recomendada, **ngrok con dominio fijo gratuito** (HTTPS incluido, sin abrir puertos del router):
+
+```bash
+sudo apt install ngrok            # o descárgalo de ngrok.com
+ngrok config add-authtoken <TU_TOKEN_DE_NGROK>
+ngrok http --url=<tu-dominio>.ngrok-free.app 8000
 ```
+
+Los agentes usarán `https://<tu-dominio>.ngrok-free.app`. Alternativa: redirigir un puerto del router a Kali
+con DNS dinámico y un proxy HTTPS (Caddy/nginx). Usa siempre HTTPS si el tráfico va por Internet.
+
+### Agente Windows: instalador `.exe`
+
+No necesita Python ni PowerShell en el equipo: el ejecutable lo incluye todo.
+
+1. Descarga `ThreatHuntingAgent-Setup.exe` desde la pestaña **Actions** del repositorio
+   (workflow "Instalador del agente Windows" → último run → *Artifacts*).
+2. Ejecútalo en el Windows, escribe la URL del servidor y la clave del agente, y pulsa Siguiente → Instalar.
+3. El agente queda corriendo como SYSTEM y arranca con Windows. Log: `C:\ProgramData\ThreatHuntingAgent\agent.log`.
+   Se desinstala desde *Configuración → Aplicaciones*.
+
+Instalación desatendida: `ThreatHuntingAgent-Setup.exe /VERYSILENT /SERVER=https://... /KEY=...`
 
 ### Variables de entorno del servidor
 

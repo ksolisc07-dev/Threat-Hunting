@@ -688,22 +688,47 @@ class Agent:
             time.sleep(self.interval + random.uniform(0, self.interval * 0.1))
 
 
+def default_config_path() -> Path:
+    """Ruta donde el instalador de Windows deja la configuración."""
+    if IS_WIN:
+        return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "ThreatHuntingAgent" / "config.json"
+    return Path("/etc/threat-hunting-agent/config.json")
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Agente de Threat Hunting")
-    ap.add_argument("--server", default=os.environ.get("THL_SERVER", "http://127.0.0.1:8000"))
-    ap.add_argument("--enroll-key", default=os.environ.get("THL_ENROLL_KEY", "change-me-enroll-key"))
-    ap.add_argument("--interval", type=int, default=int(os.environ.get("THL_INTERVAL", 60)),
+    for stream in (sys.stdout, sys.stderr):  # consolas Windows con codificación limitada
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config")
+    known, _ = pre.parse_known_args()
+    cfg_path = Path(known.config) if known.config else default_config_path()
+    cfg: dict = {}
+    if cfg_path.is_file():
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
+        # estado y log junto al archivo de configuración salvo que se indique otra cosa
+        cfg.setdefault("state_file", str(cfg_path.parent / "agent_state.json"))
+        cfg.setdefault("log_file", str(cfg_path.parent / "agent.log"))
+
+    ap = argparse.ArgumentParser(description="Agente de Threat Hunting", parents=[pre])
+    ap.add_argument("--server", default=cfg.get("server") or os.environ.get("THL_SERVER", "http://127.0.0.1:8000"))
+    ap.add_argument("--enroll-key", default=cfg.get("enroll_key") or os.environ.get("THL_ENROLL_KEY", "change-me-enroll-key"))
+    ap.add_argument("--interval", type=int, default=int(cfg.get("interval") or os.environ.get("THL_INTERVAL", 60)),
                     help="segundos entre envíos de telemetría")
-    ap.add_argument("--persistence-every", type=int, default=10, help="recolectar persistencia cada N ciclos")
-    ap.add_argument("--state-file", default=os.environ.get("THL_STATE", "agent_state.json"))
-    ap.add_argument("--ca", help="certificado CA para HTTPS con CA propia")
+    ap.add_argument("--persistence-every", type=int, default=int(cfg.get("persistence_every", 10)),
+                    help="recolectar persistencia cada N ciclos")
+    ap.add_argument("--state-file", default=cfg.get("state_file") or os.environ.get("THL_STATE", "agent_state.json"))
+    ap.add_argument("--ca", default=cfg.get("ca"), help="certificado CA para HTTPS con CA propia")
     ap.add_argument("--once", action="store_true", help="un único ciclo (pruebas)")
-    ap.add_argument("--log-file", help="escribir el log en este archivo (para ejecución como servicio)")
+    ap.add_argument("--log-file", default=cfg.get("log_file"),
+                    help="escribir el log en este archivo (para ejecución como servicio)")
     args = ap.parse_args()
     global LOG_FILE
     LOG_FILE = args.log_file
     agent = Agent(args.server, args.enroll_key, args.interval, args.state_file, args.persistence_every, args.ca)
-    log(f"Agente {VERSION} -> {agent.server} (intervalo {args.interval}s)")
+    log(f"Agente {VERSION} -> {agent.server} (intervalo {args.interval}s)" + (f" [config {cfg_path}]" if cfg else ""))
     try:
         agent.run(once=args.once)
     except KeyboardInterrupt:
