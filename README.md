@@ -69,7 +69,13 @@ ngrok config add-authtoken <TU_TOKEN_DE_NGROK>
 ngrok http --url=<tu-dominio>.ngrok-free.app 8000
 ```
 
-Los agentes usarán `https://<tu-dominio>.ngrok-free.app`. Alternativa: redirigir un puerto del router a Kali
+Los agentes usarán `https://<tu-dominio>.ngrok-free.app`. Para que `./start_server.sh` arranque también el
+túnel automáticamente, añade a `.env`:
+
+```
+THL_PORT=8000
+NGROK_URL=<tu-dominio>.ngrok-free.app
+``` Alternativa: redirigir un puerto del router a Kali
 con DNS dinámico y un proxy HTTPS (Caddy/nginx). Usa siempre HTTPS si el tráfico va por Internet.
 
 ### Agente Windows: instalador `.exe`
