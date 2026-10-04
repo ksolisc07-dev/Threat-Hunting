@@ -48,6 +48,31 @@ python agent/th_agent.py --server http://SERVIDOR:8000 --enroll-key 'clave-de-en
 
 En producción, usa HTTPS delante del servidor (proxy inverso). El agente admite `--ca` para una CA propia.
 
+### Windows
+
+Requisito: Python 3.10+ de [python.org](https://www.python.org/downloads/windows/), instalado con
+**"Install for all users"** y **"Add python.exe to PATH"**.
+
+Servidor (PowerShell):
+
+```powershell
+cd C:\Threat-Hunting
+python -m pip install -r requirements.txt
+$env:THL_ADMIN_TOKEN = "token-del-analista"
+$env:THL_ENROLL_KEY  = "clave-de-enrolamiento"
+python -m uvicorn server.main:app --host 0.0.0.0 --port 8000
+# Si los agentes están en otros equipos, abre el puerto (PowerShell como Administrador):
+New-NetFirewallRule -DisplayName "Threat Hunting 8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow
+```
+
+Agente como tarea programada (arranca con el sistema y corre como SYSTEM). Ejecuta en PowerShell **como Administrador**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\agent\install_windows.ps1 -Server http://IP-DEL-SERVIDOR:8000 -EnrollKey "clave-de-enrolamiento"
+# Log:          C:\ProgramData\ThreatHuntingAgent\agent.log
+# Desinstalar:  powershell -ExecutionPolicy Bypass -File .\agent\install_windows.ps1 -Uninstall
+```
+
 ### Variables de entorno del servidor
 
 | Variable | Defecto | Descripción |

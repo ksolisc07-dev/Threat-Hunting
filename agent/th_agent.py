@@ -57,8 +57,22 @@ SIGNATURES = {
 }
 
 
+LOG_FILE: str | None = None
+LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
 def log(msg: str) -> None:
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    if not LOG_FILE:
+        print(line, flush=True)
+        return
+    try:
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > LOG_MAX_BYTES:
+            os.replace(LOG_FILE, LOG_FILE + ".1")
+        with open(LOG_FILE, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
 
 
 # ===========================================================================
@@ -278,7 +292,13 @@ def _homes() -> list[Path]:
             pass
     if not IS_WIN:
         homes.append(Path("/root"))
-    return list(dict.fromkeys(homes))
+    unique: dict[str, Path] = {}
+    for h in homes:
+        try:
+            unique.setdefault(str(h.resolve()).lower() if IS_WIN else str(h.resolve()), h.resolve())
+        except OSError:
+            pass
+    return list(unique.values())
 
 
 def _cron_lines(path: Path) -> list[str]:
@@ -678,7 +698,10 @@ def main():
     ap.add_argument("--state-file", default=os.environ.get("THL_STATE", "agent_state.json"))
     ap.add_argument("--ca", help="certificado CA para HTTPS con CA propia")
     ap.add_argument("--once", action="store_true", help="un único ciclo (pruebas)")
+    ap.add_argument("--log-file", help="escribir el log en este archivo (para ejecución como servicio)")
     args = ap.parse_args()
+    global LOG_FILE
+    LOG_FILE = args.log_file
     agent = Agent(args.server, args.enroll_key, args.interval, args.state_file, args.persistence_every, args.ca)
     log(f"Agente {VERSION} -> {agent.server} (intervalo {args.interval}s)")
     try:
