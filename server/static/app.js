@@ -203,7 +203,7 @@
           <td><span class="dot ${a.online ? "on" : "off"}"></span>${a.online ? "En línea" : "Desconectado"}</td>
           <td class="time">${ago(a.last_seen)}</td>
           <td>${a.open_findings}${a.critical_findings ? ` <span class="sev critical">${a.critical_findings} crít.</span>` : ""}</td>
-          <td>${risk(a.risk_score)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No hay agentes enrolados.<br><br>Ejecuta en cada endpoint:<br><code>python agent/th_agent.py --server ${esc(location.origin)} --enroll-key &lt;CLAVE&gt;</code></div>`}</div>`;
+          <td>${risk(a.risk_score)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No hay agentes enrolados todavía.<br><br>Instala <b>ThreatHuntingAgent-Setup.exe</b> en el equipo Windows con la URL pública del servidor y la clave <code>THL_ENROLL_KEY</code>.<br>Si ya lo instalaste, revisa <code>C:\\ProgramData\\ThreatHuntingAgent\\agent.log</code> en ese equipo.<br><br><span class="muted">Linux/macOS: <code>python agent/th_agent.py --server URL --enroll-key CLAVE</code></span></div>`}</div>`;
     },
     refresh: true,
   };
