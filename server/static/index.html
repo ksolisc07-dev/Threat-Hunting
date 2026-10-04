@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Threat Hunting Console</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='10' cy='10' r='6' fill='none' stroke='%2338bdf8' stroke-width='2.5'/%3E%3Cpath d='M15 15l6 6' stroke='%2338bdf8' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M15 15l6 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+      <span>Threat Hunting</span>
+    </div>
+    <button class="menu-btn" id="menuBtn" aria-label="Menú">☰</button>
+    <nav id="nav">
+      <a href="#/overview" data-view="overview">Panorama</a>
+      <a href="#/agents" data-view="agents">Agentes</a>
+      <a href="#/findings" data-view="findings">Hallazgos <span class="pill" id="navOpen"></span></a>
+      <a href="#/hunt" data-view="hunt">Caza</a>
+      <a href="#/mitre" data-view="mitre">ATT&amp;CK</a>
+      <a href="#/iocs" data-view="iocs">IOCs</a>
+      <a href="#/tasks" data-view="tasks">Tareas</a>
+    </nav>
+    <div class="top-actions">
+      <span class="live" id="live" title="Actualización en vivo"><i></i><span id="liveText">en vivo</span></span>
+      <button class="btn primary" id="huntNow">Cazar ahora</button>
+      <button class="btn ghost" id="logout" title="Cerrar sesión">Salir</button>
+    </div>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h2 id="drawerTitle"></h2>
+      <button class="btn ghost" id="drawerClose" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="modal" id="login" hidden>
+    <form class="modal-card" id="loginForm">
+      <h2>Acceso de analista</h2>
+      <p class="muted">Introduce el token de administrador (<code>THL_ADMIN_TOKEN</code>, o el que el servidor imprimió al arrancar).</p>
+      <input type="password" id="token" placeholder="Token" autocomplete="current-password" required>
+      <p class="error" id="loginError"></p>
+      <button class="btn primary" type="submit">Entrar</button>
+    </form>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
