@@ -19,7 +19,7 @@ panel web.
 1. [Guía rápida](#guía-rápida)
 2. [Primera instalación del servidor (Kali)](#1-primera-instalación-del-servidor-kali)
 3. [Publicar el servidor en Internet con ngrok](#2-publicar-el-servidor-en-internet-con-ngrok)
-4. [Instalar el agente en Windows](#3-instalar-el-agente-en-windows)
+4. [Instalar el agente en Windows](#3-instalar-el-agente-en-windows) (incluye [firma del agente](#33-firmar-el-agente-quitar-editor-desconocido))
 5. [Uso diario](#4-uso-diario)
 6. [Cómo hacer threat hunting con el panel](#5-cómo-hacer-threat-hunting-con-el-panel)
 7. [Solución de problemas](#6-solución-de-problemas)
@@ -162,9 +162,58 @@ Siguiente → Instalar → Finalizar. En menos de un minuto el equipo aparece en
 - Desinstalar: *Configuración → Aplicaciones → Threat Hunting Agent*.
 - Despliegue masivo: `ThreatHuntingAgent-Setup.exe /VERYSILENT /SERVER=https://... /KEY=...`
 
-> **SmartScreen / Defender** pueden avisar porque el `.exe` no está firmado digitalmente: *Más información →
-> Ejecutar de todas formas*. Si Defender lo bloquea, añade una exclusión para
-> `C:\Program Files\ThreatHuntingAgent\`.
+> Mientras el instalador **no esté firmado**, SmartScreen/Defender pueden avisar (*Más información → Ejecutar de
+> todas formas*). Para evitarlo, firma el agente: sección 3.3.
+
+### 3.3 Firmar el agente (quitar "Editor desconocido")
+
+El workflow firma automáticamente `th_agent.exe` y `ThreatHuntingAgent-Setup.exe` (SHA-256 + sello de tiempo) si
+el repositorio tiene estos dos secretos: `CODESIGN_PFX_BASE64` y `CODESIGN_PASSWORD`. Sin ellos genera el instalador
+sin firmar y muestra un aviso en el run.
+
+Hay dos caminos según **dónde** se instalará el agente:
+
+| | A. Certificado propio (gratis) | B. Certificado comercial (de pago) |
+|---|---|---|
+| Para | Tus equipos / laboratorio / tu empresa | Equipos de terceros que no controlas |
+| Confianza | Solo en los equipos donde instales tu `.crt` | Todos los Windows del mundo |
+| Coste | 0 | Desde ~25 €/año (p. ej. Certum Open Source) hasta varios cientos; Microsoft *Trusted Signing* por suscripción mensual (disponibilidad según país) |
+| SmartScreen | Sin aviso en equipos con el `.crt` instalado | Puede avisar al principio hasta que el certificado gana reputación |
+
+#### A. Certificado propio
+
+1. **En Kali** (una vez), desde la carpeta del proyecto:
+   ```bash
+   ./agent/windows/create_codesign_cert.sh "Tu Nombre u Organización"
+   ```
+   Crea la carpeta `codesign/` (excluida de git) e imprime la contraseña.
+2. **En GitHub**: *Settings → Secrets and variables → Actions → New repository secret*:
+   - `CODESIGN_PFX_BASE64` = contenido de `codesign/th-codesign.pfx.b64` (`cat codesign/th-codesign.pfx.b64`)
+   - `CODESIGN_PASSWORD` = la contraseña impresa por el script
+3. **Generar el instalador firmado**: *Actions → Instalador del agente Windows → Run workflow*. Descarga el nuevo
+   artifact.
+4. **En cada equipo Windows** (una vez), copia `codesign/th-codesign.crt` y haz doble clic → *Instalar certificado…* →
+   **Equipo local** → *Colocar todos los certificados en el siguiente almacén* → **Entidades de certificación raíz de
+   confianza** → Finalizar. Repite el proceso eligiendo el almacén **Editores de confianza**.
+   En un dominio de Active Directory se distribuye a todos los equipos por GPO
+   (*Configuración del equipo → Directivas → Configuración de Windows → Configuración de seguridad → Directivas de
+   clave pública*).
+5. Comprueba: clic derecho sobre el instalador → *Propiedades → Firmas digitales* debe mostrar tu nombre, y el aviso de
+   instalación muestra tu nombre como editor en lugar de "Editor desconocido".
+
+> **Protege `codesign/th-codesign.pfx` y su contraseña.** Cualquiera que los tenga puede firmar programas en los que
+> tus equipos confiarán. No los subas a GitHub (solo como secretos cifrados) ni los envíes por chat/correo.
+
+#### B. Certificado comercial
+
+Compra un certificado de firma de código (OV) a una autoridad reconocida. Desde 2023 la clave privada debe residir en
+hardware (token USB o firma en la nube del proveedor), por lo que normalmente **no se entrega como `.pfx`**: en ese
+caso hay que adaptar `agent/windows/sign.ps1` a la herramienta de firma del proveedor. Si el proveedor sí entrega un
+`.pfx`, basta con usar los mismos dos secretos del camino A.
+
+> La firma quita el "Editor desconocido", pero no garantiza que ningún antivirus lo marque: un agente que inspecciona
+> procesos y red puede parecer sospechoso a algunos motores. Si ocurre, añade una exclusión para
+> `C:\Program Files\ThreatHuntingAgent\` o envía el archivo al fabricante como falso positivo.
 
 ### Linux / macOS
 
@@ -269,7 +318,7 @@ muchos comandos de enumeración en poco tiempo, como haría un atacante tras ent
 - **Seguridad**: el panel queda accesible desde Internet a través de ngrok; usa un `THL_ADMIN_TOKEN` largo y no
   compartas `.env`. El agente solo ejecuta módulos forenses de lectura en lista blanca: nunca comandos arbitrarios.
 - **Kali encendido**: sin servidor no hay detección; los agentes guardan las conexiones de red y reintentan.
-- **Instalador sin firma digital**: puede generar avisos de SmartScreen/antivirus.
+- **Firma digital**: sin certificado configurado el instalador sale sin firmar y genera avisos (sección 3.3).
 
 ---
 
@@ -287,7 +336,7 @@ muchos comandos de enumeración en poco tiempo, como haría un atacante tras ent
 | `server/query.py` | Lenguaje de consulta de la consola de caza |
 | `server/static/` | Panel web (HTML/CSS/JS sin dependencias) |
 | `agent/th_agent.py` | Agente multiplataforma (psutil) |
-| `agent/windows/` | Instalador Inno Setup y registro de la tarea SYSTEM |
+| `agent/windows/` | Instalador Inno Setup, registro de la tarea SYSTEM, firma de código (`sign.ps1`, `create_codesign_cert.sh`) |
 | `.github/workflows/build-agent-windows.yml` | Compila `th_agent.exe` (PyInstaller) y el instalador |
 | `start_server.sh` | Arranque del servidor (+ ngrok opcional) |
 

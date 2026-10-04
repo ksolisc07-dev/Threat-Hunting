@@ -11,3 +11,5 @@ dist/
 *.spec
 .env
 ngrok.log
+codesign/
+version_info.txt
